@@ -1,0 +1,51 @@
+services:
+  api:
+    build: .
+    image: chemistry-video-service:local
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment: &shared-env
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      JOB_REPOSITORY: sqlite
+      DATABASE_URL: sqlite:////app/data/app.db
+      ARTIFACT_DIR: /app/artifacts
+      DATA_DIR: /app/data
+      ASSETS_DIR: /app/assets
+      VIDEO_WIDTH: "1280"
+      VIDEO_HEIGHT: "720"
+      VIDEO_FPS: "30"
+      VIDEO_QUALITY: high
+      MAX_CONCURRENT_JOBS: "2"
+      JOB_TIMEOUT_SECONDS: "900"
+      TTS_PROVIDER: canonical_cache
+      ALLOW_PLACEHOLDER_AUDIO: "false"
+      GENERATION_MODE: real
+      WORKER_MODE: api_only
+      # API_KEY: change-me
+      # RATE_LIMIT_PER_MINUTE: "60"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  worker:
+    build: .
+    image: chemistry-video-service:local
+    command: ["python", "-m", "app.workers.runner"]
+    environment:
+      <<: *shared-env
+      WORKER_MODE: standalone
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy

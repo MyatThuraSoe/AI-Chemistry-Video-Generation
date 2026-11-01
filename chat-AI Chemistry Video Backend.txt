@@ -1,0 +1,3004 @@
+
+# AI Agent Implementation Specification  
+## Chemistry Educational Video Generation Backend
+
+This document is the authoritative requirement and implementation plan for building the backend service.
+
+You are an AI agent implementing this system. Read the entire document before writing code. Follow the phases in order. Do not skip validation, tests, or failure handling. The goal is not only to produce one working video. The goal is to build a reliable backend pipeline that consistently produces short educational chemistry videos.
+
+---
+
+## 1. Product Summary
+
+Build a backend service that accepts a request for a short educational chemistry video, processes the request asynchronously, and returns a completed video artifact.
+
+The product must feel like a backend video-generation job service:
+
+1. A client submits a concept request.
+2. The backend creates a job.
+3. The job moves through generation stages.
+4. The client can poll job status.
+5. When complete, the client can retrieve the video artifact.
+
+This is a backend-only service. Do not build a frontend. Demonstrate using `curl`, automated tests, or a simple script.
+
+---
+
+## 2. Primary Goals
+
+The implementation must achieve:
+
+1. A FastAPI backend.
+2. An endpoint to request a chemistry explanation video.
+3. Asynchronous job processing.
+4. An endpoint to list jobs.
+5. A visible status and stage for each job.
+6. A way to retrieve the completed video artifact.
+7. A generated MP4 video with visual content and audio.
+8. Clear backend boundaries:
+   - API layer
+   - job state
+   - generation logic
+   - persistence
+   - artifact storage
+9. Reliable generation despite non-determinism.
+10. Support for three required chemistry queries.
+11. Clear extensibility for future STEM concepts.
+
+---
+
+## 3. Required Learner Queries
+
+The service must support these three queries end-to-end:
+
+1. `How does the pH scale work?`
+2. `Why do atoms form covalent bonds?`
+3. `What is the difference between ionic and covalent bonding?`
+
+The service does not need to support arbitrary chemistry topics in this prototype.
+
+However, the architecture must make it clear how future concepts can be added through configuration or content packs.
+
+---
+
+## 4. Core Design Philosophy
+
+The agent must follow this design philosophy:
+
+> Use deterministic, template-based video generation as the default path. Use AI providers only behind validated interfaces. Never trust generated output without validation.
+
+Do not build the system around fully open-ended generative video models as the primary renderer. That approach is too unstable for this challenge.
+
+Instead:
+
+- Use curated scripts for the three required concepts.
+- Use structured scene templates.
+- Use deterministic rendering where possible.
+- Validate scripts, audio, and final video artifacts.
+- Use retries and fallbacks only where they improve reliability.
+- Fail with clear error states.
+
+---
+
+## 5. Technology Requirements
+
+Use the following stack unless there is a strong technical reason not to.
+
+### Language
+
+- Python 3.11+
+
+### Backend framework
+
+- FastAPI
+- Uvicorn
+- Pydantic v2
+- Pydantic Settings
+
+### Persistence
+
+Prototype:
+
+- In-memory job repository
+- Local filesystem artifact store
+
+Production-ready evolution:
+
+- SQLite or PostgreSQL for jobs
+- S3-compatible object storage for artifacts
+
+### Video generation
+
+Recommended deterministic renderer:
+
+- Pillow for frame generation
+- FFmpeg for encoding
+- Optional MoviePy or Manim if easier, but FFmpeg must be available
+
+System dependencies:
+
+- `ffmpeg`
+- `ffprobe`
+
+Optional audio dependencies:
+
+- `espeak-ng`
+- or cached pre-generated narration files
+- or a TTS provider behind an adapter
+
+### Testing
+
+- pytest
+- pytest-asyncio
+- httpx
+- FastAPI TestClient or ASGITransport
+
+### Code quality
+
+- type hints everywhere
+- ruff or equivalent linter
+- mypy or equivalent type checker if practical
+- modular code, no monolithic files
+
+---
+
+## 6. High-Level Architecture
+
+```text
+Client
+  |
+  | HTTP
+  v
+FastAPI API Layer
+  |
+  |-- create job
+  |-- list jobs
+  |-- get job status
+  |-- retrieve artifact
+  |
+  v
+Job Service
+  |
+  |-- validates request
+  |-- resolves concept
+  |-- creates job
+  |-- enqueues job
+  |
+  v
+Worker / Job Runner
+  |
+  |-- selects script
+  |-- validates script
+  |-- builds storyboard
+  |-- generates narration audio
+  |-- renders scenes
+  |-- composes final video
+  |-- validates final artifact
+  |-- marks job completed
+  |
+  v
+Artifact Store
+  |
+  |-- video.mp4
+  |-- subtitles.vtt
+  |-- thumbnail.jpg
+  |-- metadata.json
+```
+
+The API must return quickly. Video generation must happen asynchronously.
+
+---
+
+## 7. Required Repository Structure
+
+Create the project using this structure:
+
+```text
+chemistry-video-service/
+  pyproject.toml
+  README.md
+  Makefile
+  .env.example
+  Dockerfile
+  docker-compose.yml
+  artifacts/
+  data/
+  assets/
+    fonts/
+    narration/
+    templates/
+  scripts/
+    demo.sh
+    run_required_jobs.sh
+    verify_artifact.sh
+  app/
+    __init__.py
+    main.py
+    config.py
+    api/
+      __init__.py
+      dependencies.py
+      routes.py
+      schemas.py
+    domain/
+      __init__.py
+      models.py
+      states.py
+      errors.py
+    services/
+      __init__.py
+      job_service.py
+    storage/
+      __init__.py
+      job_repository.py
+      memory_repository.py
+      artifact_store.py
+    generation/
+      __init__.py
+      orchestrator.py
+      concept_registry.py
+      script_validator.py
+      storyboard_builder.py
+      audio_provider.py
+      renderer.py
+      video_validator.py
+      content/
+        __init__.py
+        canonical_scripts.py
+      providers/
+        __init__.py
+        mock_llm_provider.py
+        tts_provider.py
+        ffmpeg_renderer.py
+    workers/
+      __init__.py
+      runner.py
+    observability/
+      __init__.py
+      logging.py
+  tests/
+    conftest.py
+    unit/
+    integration/
+    e2e/
+```
+
+Do not place all logic in one file.
+
+---
+
+## 8. Environment Configuration
+
+Provide `.env.example`.
+
+Required environment variables:
+
+```env
+APP_ENV=local
+HOST=0.0.0.0
+PORT=8000
+LOG_LEVEL=INFO
+LOG_FORMAT=json
+
+ARTIFACT_DIR=./artifacts
+DATA_DIR=./data
+
+JOB_REPOSITORY=memory
+# JOB_REPOSITORY=sqlite
+# DATABASE_URL=sqlite:///./data/app.db
+
+VIDEO_WIDTH=1280
+VIDEO_HEIGHT=720
+VIDEO_FPS=30
+VIDEO_QUALITY=high
+MAX_CONCURRENT_JOBS=2
+JOB_TIMEOUT_SECONDS=900
+
+SCRIPT_SOURCE=canonical
+# SCRIPT_SOURCE=canonical_with_llm_fallback
+
+TTS_PROVIDER=canonical_cache
+# TTS_PROVIDER=espeak
+# TTS_PROVIDER=openai
+# TTS_PROVIDER=mock
+
+ALLOW_PLACEHOLDER_AUDIO=false
+ENABLE_IDEMPOTENCY=true
+```
+
+Configuration must be loaded through Pydantic Settings.
+
+The service must fail fast if required configuration is missing or invalid.
+
+---
+
+## 9. API Specification
+
+All API routes must be versioned under `/v1`.
+
+---
+
+### 9.1 Health endpoint
+
+```http
+GET /healthz
+```
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+Production readiness endpoint:
+
+```http
+GET /readyz
+```
+
+Checks:
+
+- configuration loaded
+- artifact directory writable
+- FFmpeg available
+- job repository available
+
+If not ready:
+
+```http
+503 Service Unavailable
+```
+
+---
+
+### 9.2 Create video job
+
+```http
+POST /v1/video-jobs
+```
+
+Request body:
+
+```json
+{
+  "query": "How does the pH scale work?"
+}
+```
+
+Optional fields:
+
+```json
+{
+  "query": "How does the pH scale work?",
+  "style": "short_explainer",
+  "callback_url": "https://example.com/callback"
+}
+```
+
+Validation rules:
+
+- `query` is required.
+- `query` must be between 4 and 300 characters.
+- `callback_url`, if present, must be a valid HTTP or HTTPS URL.
+- If `Idempotency-Key` header is provided, the service should return the same job for the same key and query instead of creating a duplicate job.
+
+Success response:
+
+```http
+202 Accepted
+```
+
+```json
+{
+  "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+  "status": "queued",
+  "stage": "queued",
+  "progress": 0,
+  "query": "How does the pH scale work?",
+  "concept_id": "ph-scale",
+  "created_at": "2026-10-30T12:00:00Z",
+  "updated_at": "2026-10-30T12:00:00Z",
+  "links": {
+    "self": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+    "artifact": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact",
+    "video": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact/video.mp4"
+  }
+}
+```
+
+Unsupported concept response:
+
+```http
+422 Unprocessable Entity
+```
+
+```json
+{
+  "error": {
+    "code": "UNSUPPORTED_CONCEPT",
+    "message": "The requested concept is not supported by this prototype.",
+    "retryable": false
+  }
+}
+```
+
+Invalid request body:
+
+```http
+400 Bad Request
+```
+
+```json
+{
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "Field 'query' is required.",
+    "retryable": false
+  }
+}
+```
+
+---
+
+### 9.3 Get job status
+
+```http
+GET /v1/video-jobs/{job_id}
+```
+
+Success response:
+
+```json
+{
+  "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+  "status": "running",
+  "stage": "rendering",
+  "progress": 62,
+  "query": "How does the pH scale work?",
+  "concept_id": "ph-scale",
+  "created_at": "2026-10-30T12:00:00Z",
+  "updated_at": "2026-10-30T12:01:20Z",
+  "attempts": 1,
+  "error": null,
+  "artifact": null
+}
+```
+
+Completed response must include artifact metadata:
+
+```json
+{
+  "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+  "status": "completed",
+  "stage": "completed",
+  "progress": 100,
+  "query": "How does the pH scale work?",
+  "concept_id": "ph-scale",
+  "created_at": "2026-10-30T12:00:00Z",
+  "updated_at": "2026-10-30T12:02:25Z",
+  "attempts": 1,
+  "error": null,
+  "artifact": {
+    "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+    "video_url": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact/video.mp4",
+    "metadata_url": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact",
+    "subtitles_url": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact/subtitles.vtt",
+    "thumbnail_url": "/v1/video-jobs/8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11/artifact/thumbnail.jpg",
+    "duration_seconds": 62.4,
+    "resolution": "1280x720",
+    "format": "mp4",
+    "checksum_sha256": "abc123"
+  }
+}
+```
+
+Failed response:
+
+```json
+{
+  "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+  "status": "failed",
+  "stage": "script_validation",
+  "progress": 30,
+  "query": "How does the pH scale work?",
+  "concept_id": "ph-scale",
+  "created_at": "2026-10-30T12:00:00Z",
+  "updated_at": "2026-10-30T12:00:18Z",
+  "attempts": 2,
+  "error": {
+    "code": "SCRIPT_VALIDATION_FAILED",
+    "message": "Script is missing required term: hydrogen.",
+    "stage": "script_validation",
+    "retryable": false
+  },
+  "artifact": null
+}
+```
+
+Job not found:
+
+```http
+404 Not Found
+```
+
+---
+
+### 9.4 List jobs
+
+```http
+GET /v1/video-jobs
+```
+
+Optional query parameters:
+
+```text
+status
+concept_id
+limit
+cursor
+```
+
+Example:
+
+```http
+GET /v1/video-jobs?status=completed&limit=20
+```
+
+Response:
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "8f1e5c6e-3c5f-4d0b-a5b2-2b5a3f9d0a11",
+      "status": "completed",
+      "stage": "completed",
+      "progress": 100,
+      "query": "How does the pH scale work?",
+      "concept_id": "ph-scale",
+      "created_at": "2026-10-30T12:00:00Z",
+      "updated_at": "2026-10-30T12:02:25Z",
+      "has_artifact": true
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+Default limit: 20.
+
+Maximum limit: 100.
+
+---
+
+### 9.5 Retrieve artifact metadata
+
+```http
+GET /v1/video-jobs/{job_id}/artifact
+```
+
+If completed:
+
+```http
+200 OK
+Content-Type: application/json
+```
+
+If not completed:
+
+```http
+409 Conflict
+```
+
+```json
+{
+  "error": {
+    "code": "ARTIFACT_NOT_READY",
+    "message": "The video artifact is not ready yet.",
+    "status": "running",
+    "stage": "rendering",
+    "progress": 72,
+    "retryable": true
+  }
+}
+```
+
+If failed:
+
+```http
+409 Conflict
+```
+
+```json
+{
+  "error": {
+    "code": "ARTIFACT_NOT_AVAILABLE",
+    "message": "The job failed and no artifact is available.",
+    "status": "failed",
+    "stage": "rendering",
+    "progress": 58,
+    "retryable": false
+  }
+}
+```
+
+---
+
+### 9.6 Retrieve video file
+
+```http
+GET /v1/video-jobs/{job_id}/artifact/video.mp4
+```
+
+If completed:
+
+```http
+200 OK
+Content-Type: video/mp4
+```
+
+If not completed:
+
+```http
+409 Conflict
+```
+
+If failed:
+
+```http
+409 Conflict
+```
+
+---
+
+### 9.7 Retrieve subtitles
+
+```http
+GET /v1/video-jobs/{job_id}/artifact/subtitles.vtt
+```
+
+Returns WebVTT subtitles.
+
+---
+
+### 9.8 Retrieve thumbnail
+
+```http
+GET /v1/video-jobs/{job_id}/artifact/thumbnail.jpg
+```
+
+Returns JPEG thumbnail.
+
+---
+
+## 10. Job State Machine
+
+The job must expose both high-level status and detailed stage.
+
+### High-level status values
+
+```text
+queued
+running
+completed
+failed
+```
+
+Optional:
+
+```text
+canceled
+```
+
+### Detailed stage values
+
+```text
+queued
+concept_resolution
+script_selection
+script_validation
+storyboard_generation
+narration_generation
+scene_rendering
+video_composition
+artifact_validation
+completed
+failed
+```
+
+### Valid transitions
+
+```text
+queued -> concept_resolution
+concept_resolution -> script_selection
+script_selection -> script_validation
+script_validation -> storyboard_generation
+storyboard_generation -> narration_generation
+narration_generation -> scene_rendering
+scene_rendering -> video_composition
+video_composition -> artifact_validation
+artifact_validation -> completed
+```
+
+Any stage may transition to:
+
+```text
+failed
+```
+
+Optional cancellation:
+
+```text
+queued -> canceled
+running -> canceled
+```
+
+Do not allow invalid transitions.
+
+---
+
+## 11. Job Progress Mapping
+
+Use approximate progress values:
+
+```text
+queued: 0
+concept_resolution: 5
+script_selection: 15
+script_validation: 25
+storyboard_generation: 35
+narration_generation: 50
+scene_rendering: 70
+video_composition: 85
+artifact_validation: 95
+completed: 100
+failed: progress remains at last known progress
+```
+
+Progress is informational. It does not need to be perfectly linear.
+
+---
+
+## 12. Domain Models
+
+Use Pydantic models.
+
+### Job creation request
+
+```python
+class VideoJobCreateRequest(BaseModel):
+    query: str = Field(min_length=4, max_length=300)
+    style: str | None = None
+    callback_url: HttpUrl | None = None
+```
+
+### Job error
+
+```python
+class JobError(BaseModel):
+    code: str
+    message: str
+    stage: str
+    retryable: bool
+    attempt: int | None = None
+    details: dict | None = None
+```
+
+### Artifact info
+
+```python
+class ArtifactInfo(BaseModel):
+    job_id: UUID
+    video_url: str
+    metadata_url: str
+    subtitles_url: str
+    thumbnail_url: str
+    duration_seconds: float
+    resolution: str
+    format: str
+    checksum_sha256: str
+```
+
+### Job
+
+```python
+class VideoJob(BaseModel):
+    job_id: UUID
+    query: str
+    normalized_query: str
+    concept_id: str | None
+    status: JobStatus
+    stage: JobStage
+    progress: int
+    created_at: datetime
+    updated_at: datetime
+    attempts: int
+    error: JobError | None
+    artifact: ArtifactInfo | None
+    idempotency_key: str | None
+```
+
+---
+
+## 13. Concept Registry
+
+Implement a concept registry.
+
+The registry must resolve normalized queries to concept IDs.
+
+Normalization rules:
+
+1. Trim whitespace.
+2. Convert to lowercase.
+3. Remove punctuation.
+4. Collapse multiple spaces.
+5. Remove trailing question mark.
+6. Match against alias list.
+
+Example:
+
+```text
+"How does the pH scale work?"
+```
+
+becomes:
+
+```text
+how does the ph scale work
+```
+
+Required concept IDs:
+
+```text
+ph-scale
+covalent-bonding
+ionic-vs-covalent
+```
+
+Required aliases:
+
+```json
+{
+  "ph-scale": [
+    "how does the ph scale work",
+    "how does the ph scale work?",
+    "ph scale",
+    "explain the ph scale",
+    "what is the ph scale"
+  ],
+  "covalent-bonding": [
+    "why do atoms form covalent bonds",
+    "why do atoms form covalent bonds?",
+    "covalent bonding",
+    "why covalent bonds form",
+    "explain covalent bonding"
+  ],
+  "ionic-vs-covalent": [
+    "what is the difference between ionic and covalent bonding",
+    "what is the difference between ionic and covalent bonding?",
+    "ionic vs covalent",
+    "difference between ionic and covalent bonding",
+    "compare ionic and covalent bonds"
+  ]
+}
+```
+
+If no concept is matched, reject the request with:
+
+```text
+UNSUPPORTED_CONCEPT
+```
+
+---
+
+## 14. Required Concept Content
+
+The service must include curated canonical scripts for the three required concepts.
+
+These scripts are the default reliable path.
+
+---
+
+## 15. Canonical Script: pH Scale
+
+Concept ID:
+
+```text
+ph-scale
+```
+
+Title:
+
+```text
+How the pH Scale Works
+```
+
+Summary:
+
+```text
+The pH scale shows whether a solution is acidic, neutral, or basic.
+```
+
+Required terms:
+
+```text
+pH
+acid
+basic
+neutral
+hydrogen
+```
+
+Target duration:
+
+```text
+55 to 75 seconds
+```
+
+Scenes:
+
+```json
+[
+  {
+    "scene_id": 1,
+    "layout": "title",
+    "narration": "The pH scale tells us whether a solution is acidic, neutral, or basic.",
+    "visual_description": "Title card with the pH scale appearing in the background.",
+    "on_screen_labels": ["pH scale"]
+  },
+  {
+    "scene_id": 2,
+    "layout": "ph_scale_overview",
+    "narration": "Most common pH values run from zero to fourteen.",
+    "visual_description": "Horizontal scale from 0 to 14 with numbers appearing sequentially.",
+    "on_screen_labels": ["0", "7", "14"]
+  },
+  {
+    "scene_id": 3,
+    "layout": "ph_regions",
+    "narration": "A pH below seven is acidic. A pH of seven is neutral. A pH above seven is basic, also called alkaline.",
+    "visual_description": "The scale is divided into three colored regions: acidic, neutral, basic.",
+    "on_screen_labels": ["acidic", "neutral", "basic"]
+  },
+  {
+    "scene_id": 4,
+    "layout": "hydrogen_ions",
+    "narration": "The scale is related to hydrogen ions. More hydrogen ions means lower pH. Fewer hydrogen ions means higher pH.",
+    "visual_description": "Icons of hydrogen ions appear on the acidic side, then fade on the basic side.",
+    "on_screen_labels": ["hydrogen ions", "lower pH", "higher pH"]
+  },
+  {
+    "scene_id": 5,
+    "layout": "log_scale",
+    "narration": "Each step of one pH unit represents a tenfold change in hydrogen ion concentration.",
+    "visual_description": "One step on the scale highlights and shows a multiplication symbol.",
+    "on_screen_labels": ["1 pH step", "10 times change"]
+  },
+  {
+    "scene_id": 6,
+    "layout": "examples_on_scale",
+    "narration": "Lemon juice is acidic, pure water is near neutral, and soapy water is basic.",
+    "visual_description": "Three examples appear on the scale: lemon juice, water, soap.",
+    "on_screen_labels": ["lemon juice", "water", "soap"]
+  },
+  {
+    "scene_id": 7,
+    "layout": "recap_list",
+    "narration": "Remember: below seven is acidic, seven is neutral, and above seven is basic.",
+    "visual_description": "Recap list with three bullet points and mini pH scale.",
+    "on_screen_labels": ["below 7 acidic", "7 neutral", "above 7 basic"]
+  }
+]
+```
+
+---
+
+## 16. Canonical Script: Covalent Bonding
+
+Concept ID:
+
+```text
+covalent-bonding
+```
+
+Title:
+
+```text
+Why Atoms Form Covalent Bonds
+```
+
+Summary:
+
+```text
+Atoms form covalent bonds by sharing electrons to reach a more stable arrangement.
+```
+
+Required terms:
+
+```text
+atom
+electron
+share
+valence
+bond
+```
+
+Target duration:
+
+```text
+55 to 75 seconds
+```
+
+Scenes:
+
+```json
+[
+  {
+    "scene_id": 1,
+    "layout": "title",
+    "narration": "Atoms form bonds when they can reach a more stable arrangement of electrons.",
+    "visual_description": "Title card with two simple atoms moving closer together.",
+    "on_screen_labels": ["covalent bonds"]
+  },
+  {
+    "scene_id": 2,
+    "layout": "valence_electrons",
+    "narration": "The electrons in the outer shell are called valence electrons.",
+    "visual_description": "A simple atom diagram highlights the outer shell electrons.",
+    "on_screen_labels": ["outer shell", "valence electrons"]
+  },
+  {
+    "scene_id": 3,
+    "layout": "electron_sharing",
+    "narration": "In a covalent bond, atoms share one or more pairs of valence electrons.",
+    "visual_description": "Two atoms move closer and a shared electron pair appears between them.",
+    "on_screen_labels": ["shared electrons"]
+  },
+  {
+    "scene_id": 4,
+    "layout": "nonmetal_sharing",
+    "narration": "This kind of sharing often happens between nonmetal atoms.",
+    "visual_description": "Two nonmetal atoms are shown with a subtle bond line between them.",
+    "on_screen_labels": ["nonmetal atoms"]
+  },
+  {
+    "scene_id": 5,
+    "layout": "h2_molecule",
+    "narration": "For example, two hydrogen atoms can share electrons and form a hydrogen molecule.",
+    "visual_description": "Two hydrogen atoms form H2 with a shared electron region.",
+    "on_screen_labels": ["H", "H", "H2"]
+  },
+  {
+    "scene_id": 6,
+    "layout": "shared_attraction",
+    "narration": "The shared electrons are attracted to both nuclei, helping hold the atoms together.",
+    "visual_description": "Electron pair is highlighted between two nuclei with attraction arrows.",
+    "on_screen_labels": ["nuclei", "shared pair"]
+  },
+  {
+    "scene_id": 7,
+    "layout": "recap_list",
+    "narration": "Covalent bonding means atoms share electron pairs to become more stable.",
+    "visual_description": "Recap list with a simple covalent bond icon.",
+    "on_screen_labels": ["share electrons", "more stable"]
+  }
+]
+```
+
+---
+
+## 17. Canonical Script: Ionic vs Covalent Bonding
+
+Concept ID:
+
+```text
+ionic-vs-covalent
+```
+
+Title:
+
+```text
+Ionic vs Covalent Bonding
+```
+
+Summary:
+
+```text
+Ionic bonding involves electron transfer, while covalent bonding involves electron sharing.
+```
+
+Required terms:
+
+```text
+ionic
+covalent
+electron
+transfer
+share
+```
+
+Target duration:
+
+```text
+65 to 85 seconds
+```
+
+Scenes:
+
+```json
+[
+  {
+    "scene_id": 1,
+    "layout": "title",
+    "narration": "Chemical bonds can form in different ways. Two major types are ionic and covalent bonds.",
+    "visual_description": "Title card with a split screen preview: left ionic, right covalent.",
+    "on_screen_labels": ["ionic", "covalent"]
+  },
+  {
+    "scene_id": 2,
+    "layout": "ionic_transfer",
+    "narration": "In ionic bonding, one atom transfers one or more electrons to another atom.",
+    "visual_description": "An electron moves from one atom to another atom.",
+    "on_screen_labels": ["electron transfer"]
+  },
+  {
+    "scene_id": 3,
+    "layout": "metal_nonmetal",
+    "narration": "This often happens between a metal and a nonmetal.",
+    "visual_description": "Left side labels a metal atom and a nonmetal atom.",
+    "on_screen_labels": ["metal", "nonmetal"]
+  },
+  {
+    "scene_id": 4,
+    "layout": "ionic_ions",
+    "narration": "The electron transfer creates positive and negative ions, which attract each other.",
+    "visual_description": "Atoms become plus and minus ions and move together.",
+    "on_screen_labels": ["positive ion", "negative ion"]
+  },
+  {
+    "scene_id": 5,
+    "layout": "salt_example",
+    "narration": "Table salt, sodium chloride, is a common ionic compound.",
+    "visual_description": "NaCl label appears near a simple ionic lattice icon.",
+    "on_screen_labels": ["NaCl", "table salt"]
+  },
+  {
+    "scene_id": 6,
+    "layout": "covalent_share",
+    "narration": "In covalent bonding, atoms share electron pairs instead of transferring them.",
+    "visual_description": "Right side shows two atoms sharing electrons.",
+    "on_screen_labels": ["shared electrons"]
+  },
+  {
+    "scene_id": 7,
+    "layout": "molecule_example",
+    "narration": "Covalent bonds often form between nonmetal atoms, creating molecules such as water.",
+    "visual_description": "Simple water molecule appears with covalent bonds.",
+    "on_screen_labels": ["H2O"]
+  },
+  {
+    "scene_id": 8,
+    "layout": "comparison_table",
+    "narration": "Ionic bonding transfers electrons and creates ions. Covalent bonding shares electrons and forms molecules.",
+    "visual_description": "Comparison table with two columns: ionic and covalent.",
+    "on_screen_labels": ["transfer", "share"]
+  }
+]
+```
+
+---
+
+## 18. Script Source Policy
+
+Default policy:
+
+```text
+SCRIPT_SOURCE=canonical
+```
+
+This means:
+
+- Use curated canonical scripts.
+- Do not call an LLM by default.
+- This gives deterministic, reliable output.
+
+Optional policy:
+
+```text
+SCRIPT_SOURCE=canonical_with_llm_fallback
+```
+
+If enabled:
+
+1. Try LLM script generation.
+2. Validate output.
+3. If invalid, retry once with validation errors.
+4. If still invalid, fall back to canonical script.
+5. Record which script source was used.
+
+LLM output must be JSON and must match the script schema.
+
+Do not use raw freeform LLM output directly.
+
+---
+
+## 19. Script Schema
+
+Every script must conform to this schema:
+
+```json
+{
+  "concept_id": "ph-scale",
+  "title": "How the pH Scale Works",
+  "summary": "The pH scale shows whether a solution is acidic, neutral, or basic.",
+  "target_duration_seconds": 60,
+  "scenes": [
+    {
+      "scene_id": 1,
+      "layout": "title",
+      "narration": "string",
+      "visual_description": "string",
+      "on_screen_labels": ["string"]
+    }
+  ]
+}
+```
+
+Validation rules:
+
+1. `concept_id` must match the resolved concept.
+2. `title` must be non-empty.
+3. `summary` must be non-empty.
+4. `scenes` must contain 4 to 10 scenes.
+5. Each scene must have non-empty narration.
+6. Each scene must have non-empty visual description.
+7. Each scene must have at least one on-screen label.
+8. Required concept terms must appear in the combined narration and labels.
+9. Estimated narration duration must fit target duration.
+10. No scene may exceed 20 seconds unless necessary.
+11. No unsafe or irrelevant chemistry claims.
+
+---
+
+## 20. Storyboard Generation
+
+After script validation, convert the script into a storyboard.
+
+A storyboard scene is renderable.
+
+Example:
+
+```json
+{
+  "scene_id": 3,
+  "layout": "ph_regions",
+  "duration_seconds": 12.0,
+  "narration_text": "A pH below seven is acidic...",
+  "caption_text": "A pH below seven is acidic...",
+  "background": "gradient_dark_blue",
+  "palette": {
+    "primary": "#4CC9F0",
+    "acid": "#F94144",
+    "neutral": "#90BE6D",
+    "base": "#577590"
+  },
+  "elements": [
+    {
+      "type": "text",
+      "value": "acidic",
+      "position": "left",
+      "size": "large"
+    },
+    {
+      "type": "rectangle",
+      "value": "ph_scale",
+      "position": "center"
+    }
+  ],
+  "animation": "fade_and_slide",
+  "transition_out": "fade"
+}
+```
+
+The storyboard builder must estimate scene duration from narration audio duration when available.
+
+If audio duration is unavailable, estimate using:
+
+```text
+2.6 words per second
+```
+
+Add 0.5 seconds padding per scene.
+
+---
+
+## 21. Audio Generation Requirements
+
+The final video must include audio.
+
+Preferred audio strategy:
+
+1. Use cached pre-generated narration files if available.
+2. If not available, use local TTS such as `espeak-ng`.
+3. If a remote TTS provider is configured, use it behind an adapter.
+4. If no audio provider is available and `ALLOW_PLACEHOLDER_AUDIO=false`, fail the job.
+5. If `ALLOW_PLACEHOLDER_AUDIO=true`, generate a placeholder audio track, but mark metadata clearly as placeholder and include subtitles.
+
+Narration provider interface:
+
+```python
+class NarrationProvider:
+    def generate(
+        self,
+        text: str,
+        voice: str | None = None,
+    ) -> AudioResult:
+        ...
+```
+
+Audio result must include:
+
+```python
+class AudioResult(BaseModel):
+    file_path: Path
+    duration_seconds: float
+    provider: str
+    is_placeholder: bool
+    sample_rate: int | None
+    checksum_sha256: str
+```
+
+Audio validation:
+
+1. File exists.
+2. File size is greater than zero.
+3. Duration is greater than 0.3 seconds.
+4. Audio can be parsed by FFmpeg.
+5. Audio sample rate is valid.
+6. Audio is not completely silent unless placeholder mode is enabled.
+
+Audio must be cached by:
+
+```text
+sha256(text + voice + provider)
+```
+
+This avoids repeated generation and improves consistency.
+
+---
+
+## 22. Video Rendering Requirements
+
+The renderer must produce a playable MP4 file.
+
+Default output:
+
+```text
+Container: MP4
+Video codec: H.264
+Audio codec: AAC
+Resolution: 1280x720 by default
+Optional production resolution: 1920x1080
+Frame rate: 30 fps
+```
+
+The renderer must support:
+
+1. Title cards.
+2. Text bullets.
+3. Horizontal pH scale.
+4. Simple atom diagrams.
+5. Shared electron pairs.
+6. Split-screen comparison.
+7. Simple comparison table.
+8. Recap cards.
+9. Captions at the bottom of the screen.
+10. Fade or slide transitions.
+
+Visual style:
+
+```text
+Background: dark blue gradient
+Primary text: white
+Accent: cyan
+Acid color: red or orange
+Neutral color: green
+Base color: blue or purple
+Electron color: yellow or cyan
+Font: sans-serif, bold, high legibility
+Minimum caption size: large enough for mobile viewing
+```
+
+Do not use tiny text.
+
+Do not overload scenes with too many labels.
+
+Each scene should communicate one main idea.
+
+---
+
+## 23. Rendering Implementation Strategy
+
+The recommended implementation is:
+
+1. For each scene, generate image frames using Pillow.
+2. Create audio for each scene.
+3. Encode each scene into a temporary MP4 using FFmpeg.
+4. Concatenate scene videos into final MP4.
+5. Generate subtitles from scene timing.
+6. Generate thumbnail from a representative frame.
+7. Validate final MP4.
+
+Example FFmpeg command pattern for a scene:
+
+```bash
+ffmpeg -y \
+  -framerate 30 \
+  -i scene_frames/%04d.png \
+  -i scene_audio.wav \
+  -c:v libx264 \
+  -pix_fmt yuv420p \
+  -c:a aac \
+  -shortest scene.mp4
+```
+
+Example concat file:
+
+```text
+file 'scene_01.mp4'
+file 'scene_02.mp4'
+file 'scene_03.mp4'
+```
+
+Example concat command:
+
+```bash
+ffmpeg -y -f concat -safe 0 -i concat.txt -c copy final.mp4
+```
+
+If codec parameters differ, re-encode instead of using `-c copy`.
+
+---
+
+## 24. Subtitle Requirements
+
+Generate WebVTT subtitles.
+
+Example:
+
+```vtt
+WEBVTT
+
+00:00:00.000 --> 00:00:06.500
+The pH scale tells us whether a solution is acidic, neutral, or basic.
+
+00:00:06.500 --> 00:00:11.800
+Most common pH values run from zero to fourteen.
+```
+
+Subtitles must match audio timing as closely as possible.
+
+---
+
+## 25. Thumbnail Requirements
+
+Generate one JPEG thumbnail.
+
+Recommended thumbnail:
+
+```text
+Resolution: 1280x720
+Content: concept title + simple visual motif
+Format: JPEG
+Filename: thumbnail.jpg
+```
+
+For pH:
+
+- show pH scale
+
+For covalent:
+
+- show two atoms sharing electrons
+
+For ionic vs covalent:
+
+- show split comparison
+
+---
+
+## 26. Artifact Storage Requirements
+
+Store artifacts under:
+
+```text
+artifacts/{job_id}/
+```
+
+Files:
+
+```text
+artifacts/{job_id}/video.mp4
+artifacts/{job_id}/metadata.json
+artifacts/{job_id}/script.json
+artifacts/{job_id}/storyboard.json
+artifacts/{job_id}/subtitles.vtt
+artifacts/{job_id}/thumbnail.jpg
+```
+
+The artifact store must prevent path traversal.
+
+Job IDs must be validated as UUIDs before building paths.
+
+---
+
+## 27. Artifact Metadata Requirements
+
+Every completed job must write `metadata.json`.
+
+Required fields:
+
+```json
+{
+  "job_id": "string",
+  "concept_id": "string",
+  "title": "string",
+  "query": "string",
+  "created_at": "ISO timestamp",
+  "completed_at": "ISO timestamp",
+  "pipeline_version": "string",
+  "script_source": "canonical",
+  "script_version": "string",
+  "audio_provider": "string",
+  "renderer": "string",
+  "video": {
+    "path": "string",
+    "duration_seconds": 0,
+    "resolution": "string",
+    "fps": 0,
+    "codec": "string",
+    "checksum_sha256": "string"
+  },
+  "audio": {
+    "provider": "string",
+    "is_placeholder": false
+  },
+  "subtitles": {
+    "path": "string"
+  },
+  "thumbnail": {
+    "path": "string"
+  },
+  "validation": {
+    "script": "passed",
+    "audio": "passed",
+    "video": "passed"
+  }
+}
+```
+
+---
+
+## 28. Validation Requirements
+
+Validation is mandatory.
+
+Do not mark a job completed unless all validations pass.
+
+### Script validation
+
+Checks:
+
+1. Valid schema.
+2. Required terms present.
+3. Scene count valid.
+4. Narration not empty.
+5. Duration estimate valid.
+6. Concept ID matches.
+
+Failure code:
+
+```text
+SCRIPT_VALIDATION_FAILED
+```
+
+### Audio validation
+
+Checks:
+
+1. Audio file exists.
+2. Audio duration valid.
+3. Audio parseable by FFmpeg.
+4. Not silent unless placeholder allowed.
+
+Failure code:
+
+```text
+NARRATION_GENERATION_FAILED
+```
+
+or
+
+```text
+AUDIO_VALIDATION_FAILED
+```
+
+### Render validation
+
+Checks:
+
+1. Final MP4 exists.
+2. File size is above minimum threshold.
+3. FFprobe can parse file.
+4. Video stream exists.
+5. Audio stream exists.
+6. Duration is within expected range.
+7. Resolution is correct.
+8. Video codec is H.264 or compatible.
+9. Audio codec is AAC or compatible.
+10. Subtitles file exists.
+11. Thumbnail exists.
+12. Metadata file exists and is valid JSON.
+
+Failure code:
+
+```text
+VIDEO_VALIDATION_FAILED
+```
+
+---
+
+## 29. Retry and Fallback Policy
+
+Retries must be limited.
+
+Do not retry indefinitely.
+
+### Script generation
+
+If using canonical script:
+
+```text
+No retry needed.
+```
+
+If using LLM:
+
+```text
+max_attempts: 2
+fallback: canonical script
+```
+
+### Audio generation
+
+```text
+max_attempts: 2
+fallback: cached narration if available
+if no fallback: fail job
+```
+
+### Rendering
+
+```text
+max_attempts: 2
+fallback: none
+if second attempt fails: fail job
+```
+
+### Artifact validation
+
+```text
+If validation fails after render:
+  retry rendering once
+if validation fails again:
+  fail job
+```
+
+### Timeouts
+
+Each job must have a timeout.
+
+Default:
+
+```text
+JOB_TIMEOUT_SECONDS=900
+```
+
+If timeout is exceeded:
+
+```text
+status = failed
+stage = last known stage
+error.code = JOB_TIMEOUT
+```
+
+---
+
+## 30. Error Taxonomy
+
+Use stable error codes.
+
+```text
+INVALID_REQUEST
+UNSUPPORTED_CONCEPT
+JOB_NOT_FOUND
+ARTIFACT_NOT_READY
+ARTIFACT_NOT_AVAILABLE
+CONCEPT_RESOLUTION_FAILED
+SCRIPT_VALIDATION_FAILED
+SCRIPT_GENERATION_FAILED
+NARRATION_GENERATION_FAILED
+AUDIO_VALIDATION_FAILED
+RENDER_FAILED
+VIDEO_VALIDATION_FAILED
+ARTIFACT_WRITE_FAILED
+JOB_TIMEOUT
+INTERNAL_ERROR
+```
+
+Every failed job must contain:
+
+```json
+{
+  "code": "RENDER_FAILED",
+  "message": "FFmpeg failed during video composition.",
+  "stage": "video_composition",
+  "retryable": true
+}
+```
+
+Do not expose internal stack traces to API clients.
+
+Log stack traces internally.
+
+---
+
+## 31. Persistence Requirements
+
+### Prototype
+
+Use in-memory repository.
+
+Requirements:
+
+- thread-safe
+- supports create, get, list, update
+- supports filtering by status and concept
+- supports cursor pagination or simple offset pagination
+
+Example interface:
+
+```python
+class JobRepository:
+    def create(self, job: VideoJob) -> VideoJob: ...
+    def get(self, job_id: UUID) -> VideoJob | None: ...
+    def list(self, filters: JobFilters) -> list[VideoJob]: ...
+    def update(self, job_id: UUID, updates: dict) -> VideoJob | None: ...
+```
+
+### Production evolution
+
+Provide a clean upgrade path:
+
+```text
+MemoryJobRepository
+SQLiteJobRepository
+PostgresJobRepository
+```
+
+The API layer must not depend directly on memory storage.
+
+---
+
+## 32. Worker Requirements
+
+The worker must process jobs asynchronously.
+
+Prototype implementation:
+
+- FastAPI startup creates a worker task.
+- Jobs are placed into an in-process queue.
+- Worker consumes queue.
+- Blocking rendering runs in a thread or executor.
+
+Production evolution:
+
+- Redis or SQS queue
+- separate worker process
+- retry queue
+- dead-letter queue
+- concurrency controls
+
+The worker must update job stage and progress as it advances.
+
+The worker must catch exceptions and mark the job failed with a meaningful error.
+
+The worker must not crash the API process.
+
+---
+
+## 33. Concurrency Requirements
+
+The service must support:
+
+```text
+MAX_CONCURRENT_JOBS
+```
+
+If more jobs are requested than active processing capacity:
+
+- keep them queued
+- do not lose them
+- do not start more than configured concurrent jobs
+
+For prototype, a semaphore or bounded worker pool is enough.
+
+---
+
+## 34. Observability Requirements
+
+Use structured logging.
+
+Every important event must include:
+
+```json
+{
+  "timestamp": "...",
+  "level": "info",
+  "event": "job_stage_changed",
+  "job_id": "...",
+  "concept_id": "...",
+  "stage": "rendering",
+  "progress": 70
+}
+```
+
+Required log events:
+
+```text
+request_received
+job_created
+job_queued
+job_stage_changed
+job_retry
+job_completed
+job_failed
+artifact_validated
+artifact_saved
+```
+
+Do not log secrets.
+
+Do not log full narration text unless in debug mode.
+
+---
+
+## 35. Testing Requirements
+
+Testing is mandatory.
+
+The project must include:
+
+```text
+tests/unit
+tests/integration
+tests/e2e
+```
+
+---
+
+## 36. Unit Tests
+
+Unit tests must cover:
+
+### Query normalization
+
+```text
+test_normalize_query_removes_punctuation
+test_normalize_query_lowercases_text
+test_normalize_query_collapses_whitespace
+```
+
+### Concept resolution
+
+```text
+test_resolve_ph_scale_query
+test_resolve_covalent_query
+test_resolve_ionic_vs_covalent_query
+test_unknown_query_raises_unsupported_concept
+```
+
+### Script validation
+
+```text
+test_valid_script_passes
+test_missing_required_term_fails
+test_empty_narration_fails
+test_too_many_scenes_fails
+test_concept_mismatch_fails
+```
+
+### State transitions
+
+```text
+test_queued_can_move_to_concept_resolution
+test_running_stage_can_move_to_failed
+test_completed_cannot_move_to_running
+test_invalid_transition_raises_error
+```
+
+### Artifact path safety
+
+```text
+test_artifact_path_accepts_uuid
+test_artifact_path_rejects_path_traversal
+```
+
+---
+
+## 37. Integration Tests
+
+Integration tests must use a fake or fast generation pipeline.
+
+They must cover:
+
+```text
+test_create_job_returns_202
+test_create_job_with_unknown_query_returns_422
+test_get_job_returns_404_for_missing_job
+test_list_jobs_returns_created_job
+test_artifact_endpoint_returns_409_before_completion
+test_completed_job_returns_artifact_metadata
+test_video_endpoint_returns_mp4_after_completion
+```
+
+Use a fake renderer in integration tests when real rendering is too slow.
+
+---
+
+## 38. End-to-End Tests
+
+End-to-end tests must run the real pipeline in a reduced-quality test mode.
+
+Test configuration:
+
+```env
+APP_ENV=test
+VIDEO_WIDTH=426
+VIDEO_HEIGHT=240
+VIDEO_FPS=5
+VIDEO_QUALITY=low
+ALLOW_PLACEHOLDER_AUDIO=true
+```
+
+E2E tests must validate all three required queries.
+
+Example:
+
+```text
+test_e2e_ph_scale_video_generation
+test_e2e_covalent_bonding_video_generation
+test_e2e_ionic_vs_covalent_video_generation
+```
+
+Each test must:
+
+1. POST job.
+2. Poll until completed or failed.
+3. Assert completed.
+4. Download artifact metadata.
+5. Download video file.
+6. Validate video using FFprobe.
+7. Assert video stream exists.
+8. Assert audio stream exists or placeholder audio is explicitly allowed.
+9. Assert duration is greater than 10 seconds in test mode.
+10. Assert subtitles exist.
+
+Mark E2E tests separately so they can be skipped in fast CI:
+
+```python
+@pytest.mark.e2e
+```
+
+---
+
+## 39. Reliability Tests
+
+The system must produce consistent results across repeated runs.
+
+Add a test:
+
+```text
+test_repeated_ph_scale_runs_succeed
+```
+
+Run the same concept at least 3 times in test mode.
+
+Assert:
+
+1. All jobs complete.
+2. All artifacts validate.
+3. Script source is stable.
+4. Concept ID is stable.
+5. No validation failures occur.
+
+---
+
+## 40. Manual Demo Scripts
+
+Provide scripts to demonstrate the service.
+
+### Demo single query
+
+```bash
+scripts/demo.sh "How does the pH scale work?"
+```
+
+The script must:
+
+1. POST job.
+2. Print job ID.
+3. Poll status.
+4. Download video to `./downloads`.
+5. Print artifact path.
+
+### Run all required queries
+
+```bash
+scripts/run_required_jobs.sh
+```
+
+This script must run all three required queries and validate that all complete.
+
+### Verify artifact
+
+```bash
+scripts/verify_artifact.sh path/to/video.mp4
+```
+
+This script must use FFprobe to check:
+
+1. MP4 exists.
+2. Video stream exists.
+3. Audio stream exists.
+4. Duration is valid.
+
+---
+
+## 41. Development Phases
+
+The agent must implement the project in phases.
+
+Do not move to the next phase until the current phase passes its acceptance criteria.
+
+---
+
+# Phase 0: Project Setup
+
+## Goal
+
+Create project skeleton and install dependencies.
+
+## Tasks
+
+1. Create repository structure.
+2. Create `pyproject.toml`.
+3. Create `.env.example`.
+4. Create `README.md`.
+5. Add `Makefile`.
+6. Add linter config.
+7. Add pytest config.
+8. Verify FFmpeg is installed.
+
+## Commands
+
+```bash
+python --version
+ffmpeg -version
+ffprobe -version
+```
+
+Install dependencies:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+```
+
+## Acceptance Criteria
+
+- `python --version` works.
+- `ffmpeg -version` works.
+- `ffprobe -version` works.
+- Project structure exists.
+- `pytest` runs, even if only placeholder tests exist.
+
+---
+
+# Phase 1: FastAPI Skeleton
+
+## Goal
+
+Create a runnable FastAPI app with health endpoints.
+
+## Tasks
+
+1. Create `app/main.py`.
+2. Add `/healthz`.
+3. Add `/readyz`.
+4. Add settings loader.
+5. Add structured logging.
+6. Add request ID middleware.
+
+## Acceptance Criteria
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Then:
+
+```bash
+curl http://localhost:8000/healthz
+```
+
+Returns:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
+# Phase 2: Domain Models and API Schemas
+
+## Goal
+
+Define all domain and API models.
+
+## Tasks
+
+1. Define job status enum.
+2. Define job stage enum.
+3. Define error model.
+4. Define artifact model.
+5. Define job model.
+6. Define request and response schemas.
+7. Add validation constraints.
+
+## Acceptance Criteria
+
+- Models import cleanly.
+- Type hints are complete.
+- Unit tests validate enums and schemas.
+- Invalid request schemas fail validation.
+
+---
+
+# Phase 3: Job Repository
+
+## Goal
+
+Implement job persistence boundary.
+
+## Tasks
+
+1. Define `JobRepository` interface.
+2. Implement `MemoryJobRepository`.
+3. Add thread-safe locking.
+4. Add list filtering.
+5. Add pagination.
+6. Add unit tests.
+
+## Acceptance Criteria
+
+- Can create job.
+- Can retrieve job.
+- Can list jobs.
+- Can update job.
+- Invalid job ID returns None.
+- Tests pass.
+
+---
+
+# Phase 4: Concept Registry
+
+## Goal
+
+Implement concept resolution.
+
+## Tasks
+
+1. Implement query normalization.
+2. Implement alias registry.
+3. Add required concepts.
+4. Add unsupported concept error.
+5. Add unit tests.
+
+## Acceptance Criteria
+
+The following queries resolve:
+
+```text
+How does the pH scale work?
+Why do atoms form covalent bonds?
+What is the difference between ionic and covalent bonding?
+```
+
+Unknown query raises:
+
+```text
+UNSUPPORTED_CONCEPT
+```
+
+---
+
+# Phase 5: Job API Endpoints
+
+## Goal
+
+Implement job creation, status, and list endpoints.
+
+## Tasks
+
+1. Add POST `/v1/video-jobs`.
+2. Add GET `/v1/video-jobs/{job_id}`.
+3. Add GET `/v1/video-jobs`.
+4. Add dependency injection for repository.
+5. Add error handlers.
+6. Add idempotency support.
+7. Add integration tests.
+
+## Acceptance Criteria
+
+```bash
+curl -X POST http://localhost:8000/v1/video-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"query":"How does the pH scale work?"}'
+```
+
+Returns:
+
+```http
+202 Accepted
+```
+
+Job can be retrieved by ID.
+
+Job appears in list.
+
+Unknown query returns `422`.
+
+---
+
+# Phase 6: Canonical Scripts
+
+## Goal
+
+Add curated scripts for required concepts.
+
+## Tasks
+
+1. Add canonical scripts module.
+2. Add pH script.
+3. Add covalent script.
+4. Add ionic vs covalent script.
+5. Add script schema validation.
+6. Add unit tests.
+
+## Acceptance Criteria
+
+All three scripts validate successfully.
+
+All required terms are present.
+
+Scene counts are within limits.
+
+---
+
+# Phase 7: Fake Generator and Worker
+
+## Goal
+
+Implement asynchronous job processing with a fake generator.
+
+## Tasks
+
+1. Create worker queue abstraction.
+2. Create job runner.
+3. Implement fake generator that updates stages.
+4. Update job status and progress.
+5. Add tests with fake generator.
+
+## Acceptance Criteria
+
+Job moves through:
+
+```text
+queued -> running -> completed
+```
+
+Status endpoint reflects stage changes.
+
+Artifact endpoint returns `409` before completion.
+
+---
+
+# Phase 8: Script and Storyboard Pipeline
+
+## Goal
+
+Turn canonical scripts into storyboards.
+
+## Tasks
+
+1. Implement script loader.
+2. Implement script validator.
+3. Implement storyboard builder.
+4. Estimate scene durations.
+5. Save `script.json` and `storyboard.json`.
+6. Add unit tests.
+
+## Acceptance Criteria
+
+Each required concept produces a valid storyboard.
+
+Storyboard includes:
+
+- scene_id
+- layout
+- duration_seconds
+- narration_text
+- caption_text
+- visual elements
+
+---
+
+# Phase 9: Audio Provider
+
+## Goal
+
+Generate narration audio.
+
+## Tasks
+
+1. Define `NarrationProvider` interface.
+2. Implement cached narration provider.
+3. Implement local TTS provider if available.
+4. Implement placeholder provider for tests.
+5. Add audio validation.
+6. Add caching by text hash.
+
+## Acceptance Criteria
+
+For each scene:
+
+- audio file exists
+- duration is valid
+- provider name is recorded
+- placeholder flag is recorded if applicable
+
+---
+
+# Phase 10: Renderer
+
+## Goal
+
+Render MP4 videos.
+
+## Tasks
+
+1. Implement frame generation.
+2. Implement scene rendering.
+3. Implement transitions.
+4. Implement caption drawing.
+5. Implement FFmpeg encoding.
+6. Implement scene concatenation.
+7. Generate subtitles.
+8. Generate thumbnail.
+9. Save artifact files.
+
+## Acceptance Criteria
+
+For each required concept:
+
+- final MP4 exists
+- video stream exists
+- audio stream exists
+- subtitles exist
+- thumbnail exists
+- metadata exists
+
+Video is playable.
+
+---
+
+# Phase 11: Artifact Validation
+
+## Goal
+
+Validate final artifacts before completion.
+
+## Tasks
+
+1. Implement FFprobe wrapper.
+2. Check video stream.
+3. Check audio stream.
+4. Check duration.
+5. Check resolution.
+6. Check file size.
+7. Check metadata.
+8. Store validation report.
+
+## Acceptance Criteria
+
+A corrupted or empty file causes:
+
+```text
+VIDEO_VALIDATION_FAILED
+```
+
+A valid file allows job completion.
+
+---
+
+# Phase 12: Failure Handling and Retries
+
+## Goal
+
+Make failures clear and recoverable where appropriate.
+
+## Tasks
+
+1. Add retry policy.
+2. Add fallback to canonical script.
+3. Add fallback to cached audio.
+4. Add render retry.
+5. Add timeout handling.
+6. Add error taxonomy.
+7. Add failed job tests.
+
+## Acceptance Criteria
+
+A failed job contains:
+
+```json
+{
+  "status": "failed",
+  "stage": "rendering",
+  "error": {
+    "code": "RENDER_FAILED",
+    "message": "...",
+    "retryable": true
+  }
+}
+```
+
+No job fails silently.
+
+---
+
+# Phase 13: Observability
+
+## Goal
+
+Make the system debuggable.
+
+## Tasks
+
+1. Add structured logs.
+2. Add request ID middleware.
+3. Add job event logs.
+4. Add stage duration metrics in memory.
+5. Add failed-stage logging.
+
+## Acceptance Criteria
+
+Logs include:
+
+```text
+job_created
+job_stage_changed
+job_completed
+job_failed
+```
+
+Logs include `job_id`.
+
+---
+
+# Phase 14: End-to-End Required Query Validation
+
+## Goal
+
+Prove the three required queries work end-to-end.
+
+## Tasks
+
+1. Run all three required queries.
+2. Poll until completion.
+3. Download artifacts.
+4. Validate artifacts.
+5. Record results.
+
+## Acceptance Criteria
+
+All three required jobs complete.
+
+All three videos:
+
+- exist
+- include audio
+- include visuals
+- include subtitles
+- include metadata
+- are playable MP4 files
+
+---
+
+# Phase 15: Production Hardening
+
+## Goal
+
+Prepare the service for production-like operation.
+
+## Tasks
+
+1. Add SQLite or PostgreSQL job repository option.
+2. Add object storage adapter interface.
+3. Add Dockerfile.
+4. Add docker-compose.
+5. Add worker separation.
+6. Add rate limiting guidance.
+7. Add API key authentication option.
+8. Add metrics endpoint.
+9. Add graceful shutdown.
+10. Add configuration validation.
+
+## Acceptance Criteria
+
+The service can run in containerized mode.
+
+Worker and API can be started separately.
+
+Environment-specific configuration is supported.
+
+---
+
+## 42. Production Readiness Levels
+
+The system should be designed to evolve through these levels.
+
+---
+
+### Level 0: Local Prototype
+
+Features:
+
+- FastAPI app
+- in-memory job repository
+- local artifact storage
+- in-process worker
+- canonical scripts
+- deterministic rendering
+- tests
+
+Command:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+---
+
+### Level 1: Reliable Prototype
+
+Features:
+
+- SQLite job storage
+- separate worker process
+- retry policy
+- artifact validation
+- structured logs
+- E2E tests
+- demo scripts
+
+Commands:
+
+```bash
+uvicorn app.main:app
+python -m app.workers.runner
+```
+
+---
+
+### Level 2: Staging
+
+Features:
+
+- PostgreSQL
+- Redis queue or Celery
+- S3-compatible artifact storage
+- metrics endpoint
+- health checks
+- API authentication
+- rate limiting
+- container deployment
+- staging smoke tests
+
+---
+
+### Level 3: Production
+
+Features:
+
+- managed database
+- durable queue
+- object storage CDN
+- secrets manager
+- autoscaling workers
+- observability dashboard
+- alerting
+- dead-letter queue
+- human review workflow for generated content
+- provider fallback hierarchy
+- audit logging
+- abuse protection
+- backup and restore
+- rollback plan
+
+---
+
+## 43. Docker Requirements
+
+Provide a Dockerfile.
+
+Minimum Dockerfile behavior:
+
+1. Use Python 3.11 slim image.
+2. Install FFmpeg.
+3. Install fonts.
+4. Install Python dependencies.
+5. Copy app code.
+6. Run Uvicorn.
+
+Example:
+
+```dockerfile
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    fonts-dejavu \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY app ./app
+COPY assets ./assets
+
+RUN pip install --no-cache-dir .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Provide docker-compose with:
+
+```yaml
+services:
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: .
+    command: python -m app.workers.runner
+```
+
+For production compose, add:
+
+```yaml
+  db:
+    image: postgres:16
+
+  redis:
+    image: redis:7
+
+  minio:
+    image: minio/minio
+```
+
+---
+
+## 44. CI Requirements
+
+The repository should support CI.
+
+Required CI steps:
+
+```bash
+pip install -e .[dev]
+ruff check .
+mypy app
+pytest tests/unit
+pytest tests/integration
+```
+
+Optional slower pipeline:
+
+```bash
+pytest tests/e2e -m e2e
+```
+
+CI should cache dependencies.
+
+E2E tests may run only nightly or on demand if they are slow.
+
+---
+
+## 45. Security Requirements
+
+The service must:
+
+1. Validate all input.
+2. Limit query length.
+3. Reject malformed job IDs.
+4. Prevent path traversal in artifact paths.
+5. Avoid exposing internal stack traces.
+6. Store secrets only in environment variables.
+7. Restrict artifact download to valid job IDs.
+8. Sanitize text before rendering.
+9. Avoid arbitrary shell command construction.
+10. Use subprocess safely if calling FFmpeg.
+
+Production additions:
+
+1. API key authentication.
+2. Rate limiting.
+3. Request size limits.
+4. Audit logs.
+5. Signed artifact URLs if using object storage.
+
+---
+
+## 46. Performance Requirements
+
+Latency is not critical, but jobs must not hang forever.
+
+Targets:
+
+```text
+API request creation: under 1 second
+Job start: under 10 seconds in local prototype
+Test-mode video generation: under 2 minutes
+High-quality local video generation: under 10 minutes per video
+```
+
+If a job exceeds timeout, fail it cleanly.
+
+---
+
+## 47. Visual Quality Rubric
+
+Generated videos should be evaluated against this rubric.
+
+### Educational clarity
+
+- Is the concept obvious?
+- Is the explanation accurate?
+- Are examples useful?
+- Is the recap clear?
+
+### Visual clarity
+
+- Is text readable?
+- Is contrast sufficient?
+- Are labels uncluttered?
+- Are diagrams simple and accurate?
+
+### Audio clarity
+
+- Is narration audible?
+- Is pacing reasonable?
+- Is audio synchronized with captions?
+
+### Technical quality
+
+- Is the video playable?
+- Does it have audio and video streams?
+- Are there no black frames or broken artifacts?
+- Is duration reasonable?
+
+---
+
+## 48. Content Accuracy Rules
+
+The generated or curated scripts must not include:
+
+1. Incorrect chemistry claims.
+2. Dangerous instructions.
+3. Irrelevant content.
+4. Overly advanced details that confuse beginners.
+5. Unsupported absolute claims where nuance is needed.
+
+Use careful phrasing.
+
+Example:
+
+Do not say:
+
+```text
+Ionic bonds always form between metals and nonmetals.
+```
+
+Say:
+
+```text
+Ionic bonding often happens between a metal and a nonmetal.
+```
+
+---
+
+## 49. Agent Behavior Rules
+
+The AI agent must follow these rules:
+
+1. Read this entire document before coding.
+2. Implement phases in order.
+3. Do not skip tests.
+4. Do not assume FFmpeg or TTS works without checking.
+5. Do not mark a phase complete without evidence.
+6. Do not use placeholder audio in final production mode unless explicitly enabled.
+7. Do not expose stack traces in API responses.
+8. Do not hardcode artifact paths without using the artifact store.
+9. Do not combine API, generation, and storage logic into one module.
+10. Do not silently swallow exceptions.
+11. If a provider fails, use the configured fallback or fail with a clear error.
+12. Every generated artifact must be validated.
+13. Every failed job must have a stable error code.
+14. Every required query must work end-to-end.
+15. Prefer deterministic behavior over clever generative behavior.
+
+---
+
+## 50. Commands the Agent Must Support
+
+Provide these Makefile targets:
+
+```makefile
+install:
+	pip install -e .[dev]
+
+run:
+	uvicorn app.main:app --reload
+
+worker:
+	python -m app.workers.runner
+
+test:
+	pytest tests/unit tests/integration
+
+test-e2e:
+	pytest tests/e2e -m e2e
+
+lint:
+	ruff check .
+
+typecheck:
+	mypy app
+
+demo:
+	bash scripts/run_required_jobs.sh
+
+docker-build:
+	docker build -t chemistry-video-service .
+
+docker-run:
+	docker run -p 8000:8000 chemistry-video-service
+```
+
+If `make` is unavailable, equivalent shell scripts must exist.
+
+---
+
+## 51. Definition of Done
+
+The implementation is complete only when all of the following are true.
+
+### API
+
+- [ ] POST `/v1/video-jobs` creates a job.
+- [ ] GET `/v1/video-jobs/{job_id}` returns status.
+- [ ] GET `/v1/video-jobs` lists jobs.
+- [ ] GET `/v1/video-jobs/{job_id}/artifact` returns artifact metadata.
+- [ ] GET `/v1/video-jobs/{job_id}/artifact/video.mp4` returns MP4.
+- [ ] Unsupported queries return `422`.
+- [ ] Missing jobs return `404`.
+- [ ] Not-ready artifacts return `409`.
+
+### Job lifecycle
+
+- [ ] Job status is visible.
+- [ ] Job stage is visible.
+- [ ] Job progress is visible.
+- [ ] Failed jobs include error codes.
+- [ ] Jobs transition through expected stages.
+- [ ] Jobs fail cleanly on timeout.
+
+### Required concepts
+
+- [ ] pH scale query works end-to-end.
+- [ ] Covalent bonding query works end-to-end.
+- [ ] Ionic vs covalent query works end-to-end.
+
+### Video artifact
+
+- [ ] MP4 is playable.
+- [ ] Video stream exists.
+- [ ] Audio stream exists.
+- [ ] Subtitles exist.
+- [ ] Thumbnail exists.
+- [ ] Metadata exists.
+- [ ] Video duration is reasonable.
+- [ ] Visual content matches the concept.
+- [ ] Audio matches the explanation or is clearly marked placeholder.
+
+### Reliability
+
+- [ ] Script validation exists.
+- [ ] Audio validation exists.
+- [ ] Video validation exists.
+- [ ] Retries are bounded.
+- [ ] Fallbacks exist.
+- [ ] Repeated runs succeed.
+- [ ] No silent failures.
+
+### Backend quality
+
+- [ ] Clean module boundaries.
+- [ ] Repository abstraction.
+- [ ] Artifact store abstraction.
+- [ ] Structured logs.
+- [ ] Unit tests pass.
+- [ ] Integration tests pass.
+- [ ] E2E tests pass in test mode.
+- [ ] README explains how to run the service.
+- [ ] Demo script works.
+
+---
+
+## 52. Final Instruction to the AI Agent
+
+You are now implementing this system.
+
+Start with Phase 0.
+
+Before writing code, produce a short implementation plan confirming:
+
+1. Project structure.
+2. Dependencies.
+3. Phase order.
+4. Testing strategy.
+5. How you will verify FFmpeg and audio availability.
+
+Then implement each phase sequentially.
+
+After each phase, run the relevant tests and show the results.
+
+Do not proceed if tests fail.
+
+Do not replace deterministic validation with unvalidated generative output.
+
+The final deliverable must be a working backend service that can reliably generate short educational chemistry videos for the three required queries, with clear job state, robust failure handling, and validated MP4 artifacts.

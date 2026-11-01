@@ -218,3 +218,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Project-specific
+# ---------------------------------------------------------------------------
+
+# Local agent workspace state (session memory, caches, tool config)
+.workbuddy-ai/
+
+# Exported development chat transcripts are local context, not source
+*Context History*.json
+
+# The template's generic `downloads/` rule above would otherwise hide the
+# service's placeholder file, so re-include that one directory explicitly.
+!chemistry-video-service/downloads/
+!chemistry-video-service/downloads/.gitkeep
+
+
